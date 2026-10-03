@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EvolveOS Demo Portal</title>
+  <style>
+    :root{font-family:Arial,sans-serif;color:#24364a;background:#eef1f5}*{box-sizing:border-box}body{margin:0}.top{display:flex;justify-content:space-between;align-items:center;padding:18px 28px;color:#fff;background:#17334c;font-weight:bold}.top small{color:#9bb6c9;font-weight:normal}.card{max-width:760px;margin:45px auto;padding:30px 36px;border-radius:8px;background:#fff;box-shadow:0 12px 35px #17263a18}.badge{display:inline-block;padding:5px 8px;border-radius:4px;color:#277c61;background:#d8f1e7;font-size:10px;font-weight:bold}.badge.replaying{color:#7350a5;background:#eee3ff}.badge.recording{color:#9a5331;background:#ffeadc}h1{margin:14px 0 8px}p{color:#748398}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:24px}label{display:grid;gap:7px;color:#718095;font-size:12px;font-weight:bold}input{height:34px;border:1px solid #d7dee8;border-radius:4px;padding:0 10px;font-size:14px}input:focus{outline:2px solid #b895f1;border-color:#9d71e9}.footer{display:flex;justify-content:space-between;align-items:center;margin-top:28px}.hint{font-size:12px;color:#91a0ae}button{border:0;background:#268e6c;color:#fff;padding:11px 18px;border-radius:4px;font-weight:bold;cursor:pointer}button.changed{background:#238696}.runbar{display:none;margin:-8px 0 22px;padding:11px 12px;border:1px solid #d7c5f4;border-radius:6px;color:#7552a3;background:#f5efff;font-size:12px}.runbar.visible{display:block}.timeline{margin-top:26px;padding-top:18px;border-top:1px solid #e3e8ef}.event{display:flex;gap:9px;padding:7px 0;color:#6d7c8c;font-size:12px}.event b{color:#2c9670}.event.repair b{color:#b16c2d}.success{margin-top:17px;color:#268e6c;font-weight:bold}
+  </style>
+</head>
+<body>
+  <div class="top"><span>acmecrm · Customer Management System</span><small>Controlled by EvolveOS</small></div>
+  <main class="card">
+    <span id="mode" class="badge">DEMO PORTAL</span>
+    <h1>Update customer</h1>
+    <p>Real browser surface used to record and replay the EvolveOS workflow.</p>
+    <div class="grid"><label>FULL NAME<input id="name" value="Maya Patel"></label><label>PHONE<input id="phone" value="+91 98765 43210"></label></div>
+    <div class="footer"><span class="hint">All changes are logged locally.</span><button id="save">Save Changes</button></div>
+    <div id="status" class="success"></div>
+    <div id="runbar" class="runbar"></div>
+    <div id="timeline" class="timeline"></div>
+  </main>
+  <script>
+    const params = new URLSearchParams(location.search)
+    const recording = params.get('record') === '1'
+    const runId = params.get('run')
+    const mode = document.getElementById('mode')
+    const status = document.getElementById('status')
+    const timeline = document.getElementById('timeline')
+    const runbar = document.getElementById('runbar')
+    const button = document.getElementById('save')
+    const nameInput = document.getElementById('name')
+    const phoneInput = document.getElementById('phone')
+    let eventCount = 0
+
+    const redact = (value) => value ? '•'.repeat(Math.min(value.length, 16)) : null
+    const record = (type, target, value = null) => fetch('/api/recordings/current/events', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ type, target, value: redact(value) }) }).then((response) => response.ok && response.json()).then((data) => { if (data) eventCount = data.count }).catch(() => {})
+    const addEvent = (text, kind = '') => { const row = document.createElement('div'); row.className = `event ${kind}`; row.innerHTML = `<b>${kind === 'repair' ? '!' : '✓'}</b><span>${text}</span>`; timeline.appendChild(row) }
+    fetch('/api/state').then((response) => response.json()).then((data) => { if (data.portal?.buttonLabel) button.textContent = data.portal.buttonLabel }).catch(() => {})
+
+    if (recording) { mode.textContent = '● RECORDING'; mode.className = 'badge recording'; addEvent('Capturing meaningful browser actions') }
+    if (runId) { mode.textContent = '▶ REPLAYING'; mode.className = 'badge replaying'; runbar.classList.add('visible'); runbar.textContent = 'EvolveOS has control of this tab · observe → act → verify'; }
+
+    nameInput.addEventListener('change', () => { addEvent('Captured name field change'); if (recording) record('type', 'full name', nameInput.value) })
+    phoneInput.addEventListener('change', () => { addEvent('Captured phone field change'); if (recording) record('type', 'phone number', phoneInput.value) })
+    button.addEventListener('click', () => { status.textContent = 'Customer updated successfully'; addEvent(`Clicked ${button.textContent}`); if (recording) record('click', `${button.textContent} button`) })
+
+    if (runId) {
+      const stream = new EventSource(`/api/runs/${runId}/events`)
+      stream.onmessage = (message) => {
+        const event = JSON.parse(message.data)
+        if (event.type === 'STEP_STARTED') {
+          if (event.stepIndex === 1) { nameInput.focus(); addEvent('Agent found customer search target') }
+          if (event.stepIndex === 2) { addEvent('Agent opened customer record') }
+          if (event.stepIndex === 3) { nameInput.value = 'Maya Patel'; phoneInput.value = '+91 98765 43210'; addEvent('Agent filled customer details') }
+        }
+        if (event.type === 'REPAIR_STARTED') { runbar.textContent = `Target changed · searching for equivalent of “${event.expected}”`; addEvent(`Target changed: ${event.detected}`, 'repair') }
+        if (event.type === 'REPAIR_COMPLETED') { button.click(); button.classList.add('changed'); button.textContent = 'Apply Update'; addEvent(`Repaired target: ${event.message}`, 'repair'); }
+        if (event.type === 'VERIFIED' || event.type === 'RUN_COMPLETED') { status.textContent = 'Customer updated successfully'; runbar.textContent = 'Workflow verified · this browser tab is up to date'; stream.close() }
+        if (event.type === 'RUN_FAILED') { runbar.textContent = event.message; stream.close() }
+      }
+    }
+  </script>
+</body>
+</html>
